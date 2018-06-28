@@ -35,6 +35,7 @@
 #include <openssl/ssl.h>
 #include <openssl/crypto.h>
 #include <openssl/err.h>
+#include <mutex>
 
 #define APNS_SANDBOX_HOST "gateway.sandbox.push.apple.com"
 #define APNS_SANDBOX_PORT 2195
@@ -56,14 +57,20 @@ typedef struct _PusherContent{
 
 class Pusher {
 public:
-	Pusher(string cerFileName);
+	Pusher();
 	virtual ~Pusher();
     
 	bool isSandBox;
     
 	void setExpirationDate(long expirationDate);
 	void pushNotification(PusherContent pushContent,vector<string> tokenStringList);
-    
+
+	static X509 *mPushCert;
+	static EVP_PKEY *mPushKey;
+	static std::mutex mMutex;
+
+	static void loadCertFile();
+
 private:
 	string _cerFileName;
 	vector<string> tokenStringVector;

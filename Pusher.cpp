@@ -27,13 +27,38 @@
 #include <arpa/inet.h>
 #include <sstream>
 #include <iostream>
-#include <string.h>
+#include <cstring>
 #include <unistd.h>
+#include <fstream>
 
-Pusher::Pusher(string cerFileName) {
-	_cerFileName = cerFileName;
+
+X509 *Pusher::mPushCert = nullptr;
+EVP_PKEY *Pusher::mPushKey = nullptr;
+std::mutex Pusher::mMutex;
+
+
+
+void Pusher::loadCertFile( ){
+	std::string file("/certs/apple/cred.pem");
+	std::ifstream ifs(file);
+	std::string content((std::istreambuf_iterator<char>(ifs)),
+						(std::istreambuf_iterator<char>()));
+	if(content.length()){
+		BIO *bio;
+		bio = BIO_new(BIO_s_mem());
+		BIO_puts(bio,content.c_str());
+		mPushCert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+		mPushKey = PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr);
+	}else{
+		std::cout<<"Error loading Apple Push Cert: file: "<< file << " is empty or does not exist";
+		exit(EXIT_FAILURE);
+	}
+}
+
+
+Pusher::Pusher() {
 	isSandBox = true;
-    _expirationDate = time(NULL) + 86400; // default expiration date set to 1 day
+    _expirationDate = time(NULL) + 86400;// default expiration date set to 1 day
 }
 
 Pusher::~Pusher() {
@@ -62,7 +87,7 @@ string Pusher::binaryToken(const std::string& input) {
 		inputCharVector.push_back(this->charToHex(input[i]));
 	}
     
-	string output = "";
+	string output;
 	char buffer[32];
 	int location = 0;
 	memset(buffer, 0, 32);
@@ -106,14 +131,13 @@ void Pusher::pushNotification(PusherContent pushContent,
 		}
         
 		string contentString = stringStream.str();
-        
-		//cout << contentString << endl;
-        
+
 		this->prepareConnect(contentString);
 	}
 }
 
 void Pusher::prepareConnect(string pushContent) {
+	std::lock_guard<std::mutex> lock(mMutex);
 	SSL_CTX *ctx;
 	SSL *ssl;
 	int sockfd;
@@ -132,15 +156,14 @@ void Pusher::prepareConnect(string pushContent) {
 		ERR_print_errors_fp(stderr);
 		exit(1);
 	}
-    
-	if (SSL_CTX_use_certificate_file(ctx, _cerFileName.c_str(),
-                                     SSL_FILETYPE_PEM) <= 0) {
+
+	if (SSL_CTX_use_certificate(ctx, mPushCert) <= 0) {
 		ERR_print_errors_fp(stderr);
 		exit(1);
 	}
-    
-	if (SSL_CTX_use_PrivateKey_file(ctx, _cerFileName.c_str(), SSL_FILETYPE_PEM)
-        <= 0) {
+
+	//TODO:ssa
+	if (SSL_CTX_use_PrivateKey(ctx, mPushKey)<= 0) {
 		ERR_print_errors_fp(stderr);
 		exit(1);
 	}
@@ -212,7 +235,8 @@ void Pusher::prepareConnect(string pushContent) {
 
 // Source: https://developer.apple.com/library/ios/documentation/NetworkingInternet/Conceptual/RemoteNotificationsPG/Chapters/LegacyFormat.html
 bool Pusher::sendPayload(SSL *sslPtr, char *deviceTokenBinary, char *payloadBuff, size_t payloadLength) {
-    bool rtn = false;
+
+	bool rtn = false;
     if (sslPtr && deviceTokenBinary && payloadBuff && payloadLength) {
         uint8_t command = 1; /* command number */
         char binaryMessageBuff[sizeof (uint8_t) + sizeof (uint32_t) + sizeof (uint32_t) + sizeof (uint16_t) +
